@@ -1,25 +1,52 @@
-import express from 'express'
-import cors    from 'cors'
-import dotenv  from 'dotenv'
+import express    from 'express'
+import cors       from 'cors'
+import dotenv     from 'dotenv'
+import nodemailer from 'nodemailer'
 
 dotenv.config()
 
 const app  = express()
 const PORT = process.env.PORT || 3001
 
-if (!process.env.GROQ_API_KEY) {
-  console.warn('\n⚠️  GROQ_API_KEY not set — /api/claude will not work\n')
-}
-if (!process.env.RESEND_API_KEY) {
-  console.warn('\n⚠️  RESEND_API_KEY not set — /api/book-demo will not work\n')
+/* ── Startup checks ─────────────────────────────────────────────── */
+if (!process.env.GROQ_API_KEY)  console.warn('\n⚠️  GROQ_API_KEY not set — /api/claude will not work\n')
+if (!process.env.SMTP_USER)     console.warn('\n⚠️  SMTP_USER not set — /api/book-demo will not work\n')
+if (!process.env.SMTP_PASS)     console.warn('\n⚠️  SMTP_PASS not set — /api/book-demo will not work\n')
+if (!process.env.ADMIN_EMAIL)   console.warn('\n⚠️  ADMIN_EMAIL not set — admin notifications disabled\n')
+
+/* ── Gmail SMTP transporter ─────────────────────────────────────── */
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,   // Gmail App Password (16 chars, no spaces)
+  },
+})
+
+/* ── Helper: send one email via Nodemailer ──────────────────────── */
+async function sendEmail({ to, subject, html, icsContent }) {
+  const mailOptions = {
+    from:    `"EduERP Pro" <${process.env.SMTP_USER}>`,
+    to,
+    subject,
+    html,
+    ...(icsContent && {
+      attachments: [{
+        filename:    'EduERP-Demo.ics',
+        content:     icsContent,
+        contentType: 'text/calendar; method=REQUEST',
+      }],
+    }),
+  }
+  return transporter.sendMail(mailOptions)
 }
 
 app.use(cors({
   origin: [
     'https://eduerppro.vercel.app',
-    'http://localhost:5173'
+    'http://localhost:5173',
   ],
-  credentials: true
+  credentials: true,
 }))
 app.use(express.json())
 
@@ -32,7 +59,7 @@ function buildICS({ name, email, org, slot }) {
   tomorrow.setHours(10, 0, 0, 0)
 
   const dtStart = formatICSDate(tomorrow)
-  const dtEnd   = formatICSDate(new Date(tomorrow.getTime() + 30 * 60 * 1000))
+  const dtEnd   = formatICSDate(new Date(tomorrow.getTime() + 2 * 60 * 60 * 1000)) // 2 hr slot
   const uid     = `demo-${Date.now()}@eduexperp.com`
   const now     = formatICSDate(new Date())
 
@@ -49,7 +76,7 @@ function buildICS({ name, email, org, slot }) {
     `DTEND:${dtEnd}`,
     `SUMMARY:EduERP Pro Demo – ${org}`,
     `DESCRIPTION:Your personalised EduERP Pro demo.\\nSlot requested: ${slot}\\nContact: ${email}`,
-    `ORGANIZER;CN=EduERP Pro Sales:mailto:${process.env.FROM_EMAIL}`,
+    `ORGANIZER;CN=EduERP Pro Sales:mailto:${process.env.SMTP_USER}`,
     `ATTENDEE;CN=${name};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${email}`,
     `ATTENDEE;CN=Admin;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${process.env.ADMIN_EMAIL}`,
     'STATUS:CONFIRMED',
@@ -66,30 +93,6 @@ function buildICS({ name, email, org, slot }) {
 
 function formatICSDate(date) {
   return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
-}
-
-/* ── Helper: send one email via Resend HTTPS API ────────────────── */
-async function sendEmail({ to, subject, html, attachments = [] }) {
-  const res = await fetch('https://api.resend.com/emails', {
-    method:  'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-    },
-    body: JSON.stringify({
-      from:        `EduERP Pro <${process.env.FROM_EMAIL}>`,
-      to:          [to],
-      subject,
-      html,
-      attachments,
-    }),
-  })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Resend error ${res.status}: ${err}`)
-  }
-  return res.json()
 }
 
 /* ── health ─────────────────────────────────────────────────────── */
@@ -135,16 +138,11 @@ app.post('/api/book-demo', async (req, res) => {
   if (!name || !email || !org || !time) {
     return res.status(400).json({ error: 'Missing required fields' })
   }
-  if (!process.env.RESEND_API_KEY) {
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
     return res.status(500).json({ success: false, error: 'Email service not configured' })
   }
 
-  const icsContent    = buildICS({ name, email, org, slot: time })
-  const icsAttachment = [{
-    filename: 'EduERP-Demo.ics',
-    content:  Buffer.from(icsContent).toString('base64'),
-    type:     'text/calendar',
-  }]
+  const icsContent = buildICS({ name, email, org, slot: time })
 
   const userHtml = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;background:#f9f9f9;padding:32px;border-radius:12px">
@@ -163,7 +161,7 @@ app.post('/api/book-demo', async (req, res) => {
       <p style="color:#555;font-size:13px">A calendar invite is attached. Please accept it to add the demo to your calendar.</p>
       <p style="color:#555;font-size:13px">Need to reschedule? Reply to this email or WhatsApp us.</p>
       <div style="text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #ddd">
-        <p style="color:#999;font-size:12px">© 2025 EduERP Pro · sales@eduexperp.com</p>
+        <p style="color:#999;font-size:12px">© 2025 EduERP Pro · ${process.env.SMTP_USER}</p>
       </div>
     </div>`
 
@@ -182,11 +180,22 @@ app.post('/api/book-demo', async (req, res) => {
     </div>`
 
   try {
-    // ✅ Fix (uses the actual user email + admin env var)
-await Promise.all([
-  sendEmail({ to: email, subject: `✅ Demo Confirmed – ${name} | ${time}`, html: userHtml, attachments: icsAttachment }),
-  sendEmail({ to: process.env.ADMIN_EMAIL, subject: `📋 New Demo Booking – ${org} | ${time}`, html: adminHtml, attachments: icsAttachment }),
-])
+    await Promise.all([
+      // ✅ Send confirmation to the user who booked
+      sendEmail({
+        to:         email,
+        subject:    `✅ Demo Confirmed – ${name} | ${time}`,
+        html:       userHtml,
+        icsContent,
+      }),
+      // ✅ Send admin notification
+      sendEmail({
+        to:         process.env.ADMIN_EMAIL,
+        subject:    `📋 New Demo Booking – ${org} | ${time}`,
+        html:       adminHtml,
+        icsContent,
+      }),
+    ])
     console.log(`✅  Demo emails sent → user: ${email} | admin: ${process.env.ADMIN_EMAIL}`)
     return res.status(200).json({ success: true, message: 'Demo booked successfully' })
   } catch (err) {
@@ -197,8 +206,7 @@ await Promise.all([
 
 app.listen(PORT, () => {
   console.log(`\n✅  Backend running → http://localhost:${PORT}`)
-  console.log(`   Groq API key  : ${(process.env.GROQ_API_KEY  || '').slice(0, 14)}…`)
-  console.log(`   Resend key    : ${(process.env.RESEND_API_KEY || '').slice(0, 14)}…`)
-  console.log(`   From email    : ${process.env.FROM_EMAIL}`)
+  console.log(`   Groq API key  : ${(process.env.GROQ_API_KEY || '').slice(0, 14)}…`)
+  console.log(`   SMTP user     : ${process.env.SMTP_USER}`)
   console.log(`   Admin email   : ${process.env.ADMIN_EMAIL}\n`)
 })
