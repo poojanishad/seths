@@ -101,7 +101,7 @@ const API_URL = import.meta.env.VITE_API_URL;
    (API key stays on the server, never in the browser)
 ═══════════════════════════════════════════════ */
 async function callClaude(prompt) {
-  const res = await fetch(`${API_URL}/api/claude`, {
+  const res = await fetch(`${API_URL.replace(/\/$/, "")}/api/claude`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
