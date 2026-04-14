@@ -1,6 +1,7 @@
-import express from 'express'
-import cors    from 'cors'
-import dotenv  from 'dotenv'
+import express    from 'express'
+import cors       from 'cors'
+import dotenv     from 'dotenv'
+import nodemailer from 'nodemailer'
 
 dotenv.config()
 
@@ -8,38 +9,33 @@ const app  = express()
 const PORT = process.env.PORT || 3001
 
 /* ── Startup checks ─────────────────────────────────────────────── */
-if (!process.env.GROQ_API_KEY)  console.warn('\n⚠️  GROQ_API_KEY not set — /api/claude will not work\n')
-if (!process.env.BREVO_API_KEY) console.warn('\n⚠️  BREVO_API_KEY not set — /api/book-demo will not work\n')
-if (!process.env.SENDER_EMAIL)  console.warn('\n⚠️  SENDER_EMAIL not set — /api/book-demo will not work\n')
-if (!process.env.ADMIN_EMAIL)   console.warn('\n⚠️  ADMIN_EMAIL not set — admin notifications disabled\n')
+if (!process.env.GROQ_API_KEY) console.warn('\n⚠️  GROQ_API_KEY not set — /api/claude will not work\n')
+if (!process.env.SMTP_USER)    console.warn('\n⚠️  SMTP_USER not set — /api/book-demo will not work\n')
+if (!process.env.SMTP_PASS)    console.warn('\n⚠️  SMTP_PASS not set — /api/book-demo will not work\n')
+if (!process.env.ADMIN_EMAIL)  console.warn('\n⚠️  ADMIN_EMAIL not set — admin notifications disabled\n')
 
-/* ── Helper: send one email via Brevo HTTPS API ─────────────────── */
+/* ── Gmail SMTP transporter via nodemailer ──────────────────────── */
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.SMTP_USER,   // e.g. palki0105@gmail.com
+    pass: process.env.SMTP_PASS,   // Gmail App Password (16-char, spaces OK)
+  },
+})
+
+/* ── Helper: send one email ─────────────────────────────────────── */
 async function sendEmail({ to, subject, html, icsContent }) {
   const attachments = icsContent
-    ? [{ name: 'EduERP-Demo.ics', content: Buffer.from(icsContent).toString('base64') }]
+    ? [{ filename: 'EduERP-Demo.ics', content: icsContent, contentType: 'text/calendar' }]
     : []
 
-  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method:  'POST',
-    headers: {
-      'accept':       'application/json',
-      'content-type': 'application/json',
-      'api-key':      process.env.BREVO_API_KEY,
-    },
-    body: JSON.stringify({
-      sender:      { name: 'EduERP Pro', email: process.env.SENDER_EMAIL },
-      to:          [{ email: to }],
-      subject,
-      htmlContent: html,
-      ...(attachments.length && { attachment: attachments }),
-    }),
+  await transporter.sendMail({
+    from:        `"EduERP Pro" <${process.env.SMTP_USER}>`,
+    to,
+    subject,
+    html,
+    attachments,
   })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Brevo error ${res.status}: ${err}`)
-  }
-  return res.json()
 }
 
 app.use(cors({
@@ -68,7 +64,7 @@ function buildICS({ name, email, org, slot }) {
     `UID:${uid}`, `DTSTAMP:${now}`, `DTSTART:${dtStart}`, `DTEND:${dtEnd}`,
     `SUMMARY:EduERP Pro Demo – ${org}`,
     `DESCRIPTION:Your personalised EduERP Pro demo.\\nSlot: ${slot}\\nContact: ${email}`,
-    `ORGANIZER;CN=EduERP Pro Sales:mailto:${process.env.SENDER_EMAIL}`,
+    `ORGANIZER;CN=EduERP Pro Sales:mailto:${process.env.SMTP_USER}`,
     `ATTENDEE;CN=${name};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${email}`,
     `ATTENDEE;CN=Admin;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${process.env.ADMIN_EMAIL}`,
     'STATUS:CONFIRMED', 'SEQUENCE:0',
@@ -115,7 +111,7 @@ app.post('/api/book-demo', async (req, res) => {
 
   if (!name || !email || !org || !time)
     return res.status(400).json({ error: 'Missing required fields' })
-  if (!process.env.BREVO_API_KEY)
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS)
     return res.status(500).json({ success: false, error: 'Email service not configured' })
 
   const icsContent = buildICS({ name, email, org, slot: time })
@@ -137,7 +133,7 @@ app.post('/api/book-demo', async (req, res) => {
       <p style="color:#555;font-size:13px">A calendar invite is attached. Please accept it to add the demo to your calendar.</p>
       <p style="color:#555;font-size:13px">Need to reschedule? Reply to this email or WhatsApp us.</p>
       <div style="text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #ddd">
-        <p style="color:#999;font-size:12px">© 2025 EduERP Pro · ${process.env.SENDER_EMAIL}</p>
+        <p style="color:#999;font-size:12px">© 2025 EduERP Pro · ${process.env.SMTP_USER}</p>
       </div>
     </div>`
 
@@ -170,8 +166,7 @@ app.post('/api/book-demo', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n✅  Backend running → http://localhost:${PORT}`)
-  console.log(`   Groq API key  : ${(process.env.GROQ_API_KEY  || '').slice(0, 14)}…`)
-  console.log(`   Brevo API key : ${(process.env.BREVO_API_KEY || '').slice(0, 14)}…`)
-  console.log(`   Sender email  : ${process.env.SENDER_EMAIL}`)
+  console.log(`   Groq API key  : ${(process.env.GROQ_API_KEY || '').slice(0, 14)}…`)
+  console.log(`   SMTP user     : ${process.env.SMTP_USER}`)
   console.log(`   Admin email   : ${process.env.ADMIN_EMAIL}\n`)
 })
