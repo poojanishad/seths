@@ -1,39 +1,29 @@
-import express   from 'express'
-import cors      from 'cors'
-import dotenv    from 'dotenv'
-import nodemailer from 'nodemailer'
+import express from 'express'
+import cors    from 'cors'
+import dotenv  from 'dotenv'
 
 dotenv.config()
 
 const app  = express()
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3001
 
 if (!process.env.GROQ_API_KEY) {
-  console.error('\n❌  GROQ_API_KEY not found in backend/.env\n')
-  process.exit(1)
+  console.warn('\n⚠️  GROQ_API_KEY not set — /api/claude will not work\n')
+}
+if (!process.env.RESEND_API_KEY) {
+  console.warn('\n⚠️  RESEND_API_KEY not set — /api/book-demo will not work\n')
 }
 
 app.use(cors({
   origin: [
-    "https://eduerppro.vercel.app",
-    "http://localhost:5173"
+    'https://eduerppro.vercel.app',
+    'http://localhost:5173'
   ],
   credentials: true
-}));
+}))
 app.use(express.json())
 
-app.get('/', (req, res) => {
-  res.send('API is running 🚀');
-});
-
-/* ── Nodemailer transporter (Gmail) ─────────────────────────────── */
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-})
+app.get('/', (_req, res) => res.send('API is running 🚀'))
 
 /* ── Build .ics calendar file string ────────────────────────────── */
 function buildICS({ name, email, org, slot }) {
@@ -59,7 +49,7 @@ function buildICS({ name, email, org, slot }) {
     `DTEND:${dtEnd}`,
     `SUMMARY:EduERP Pro Demo – ${org}`,
     `DESCRIPTION:Your personalised EduERP Pro demo.\\nSlot requested: ${slot}\\nContact: ${email}`,
-    `ORGANIZER;CN=EduERP Pro Sales:mailto:${process.env.SMTP_USER}`,
+    `ORGANIZER;CN=EduERP Pro Sales:mailto:${process.env.FROM_EMAIL}`,
     `ATTENDEE;CN=${name};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${email}`,
     `ATTENDEE;CN=Admin;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${process.env.ADMIN_EMAIL}`,
     'STATUS:CONFIRMED',
@@ -78,6 +68,30 @@ function formatICSDate(date) {
   return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
 }
 
+/* ── Helper: send one email via Resend HTTPS API ────────────────── */
+async function sendEmail({ to, subject, html, attachments = [] }) {
+  const res = await fetch('https://api.resend.com/emails', {
+    method:  'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+    },
+    body: JSON.stringify({
+      from:        `EduERP Pro <${process.env.FROM_EMAIL}>`,
+      to:          [to],
+      subject,
+      html,
+      attachments,
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Resend error ${res.status}: ${err}`)
+  }
+  return res.json()
+}
+
 /* ── health ─────────────────────────────────────────────────────── */
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 
@@ -89,7 +103,7 @@ app.post('/api/claude', async (req, res) => {
   }
   try {
     const upstream = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
+      method:  'POST',
       headers: {
         'Content-Type':  'application/json',
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
@@ -121,94 +135,69 @@ app.post('/api/book-demo', async (req, res) => {
   if (!name || !email || !org || !time) {
     return res.status(400).json({ error: 'Missing required fields' })
   }
-
-  const icsContent = buildICS({ name, email, org, slot: time })
-if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-  return res.status(500).json({
-    success: false,
-    error: "SMTP not configured"
-  })
-}
-  const userMailOptions = {
-    from:    `"EduERP Pro" <${process.env.SMTP_USER}>`,
-    to:      email,
-    subject: `✅ Demo Confirmed – EduERP Pro | ${time}`,
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;background:#f9f9f9;padding:32px;border-radius:12px">
-        <div style="text-align:center;margin-bottom:24px">
-          <h1 style="color:#0f2b5b;font-size:24px;margin:0">EduERP Pro</h1>
-          <p style="color:#4b7be5;margin:4px 0;font-size:13px">India's Leading Education ERP</p>
-        </div>
-        <h2 style="color:#0f2b5b">🎉 Demo Booked, ${name}!</h2>
-        <p style="color:#333;line-height:1.7">${confirmationMsg || `We're excited to show you EduERP Pro. Your demo is scheduled for <strong>${time}</strong>.`}</p>
-        <div style="background:#e8f0fe;border-left:4px solid #4b7be5;padding:16px;border-radius:6px;margin:20px 0">
-          <p style="margin:0;color:#0f2b5b;font-size:14px"><strong>📅 Slot:</strong> ${time}</p>
-          <p style="margin:6px 0 0;color:#0f2b5b;font-size:14px"><strong>🏫 Institution:</strong> ${org}</p>
-          <p style="margin:6px 0 0;color:#0f2b5b;font-size:14px"><strong>👥 Students:</strong> ${students || 'Not specified'}</p>
-          <p style="margin:6px 0 0;color:#0f2b5b;font-size:14px"><strong>📞 Phone:</strong> ${phone || 'Not provided'}</p>
-        </div>
-        <p style="color:#555;font-size:13px">A calendar invite is attached. Please accept it to add the demo to your calendar.</p>
-        <p style="color:#555;font-size:13px">Need to reschedule? Reply to this email or WhatsApp us.</p>
-        <div style="text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #ddd">
-          <p style="color:#999;font-size:12px">© 2025 EduERP Pro · sales@eduexperp.com</p>
-        </div>
-      </div>
-    `,
-    attachments: [{
-      filename:    'EduERP-Demo.ics',
-      content:     icsContent,
-      contentType: 'text/calendar; method=REQUEST',
-    }],
+  if (!process.env.RESEND_API_KEY) {
+    return res.status(500).json({ success: false, error: 'Email service not configured' })
   }
 
-  const adminMailOptions = {
-    from:    `"EduERP Pro Bot" <${process.env.SMTP_USER}>`,
-    to:      process.env.ADMIN_EMAIL,
-    subject: `📋 New Demo Booking – ${org} | ${time}`,
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;background:#fff;padding:24px;border:1px solid #e0e0e0;border-radius:8px">
-        <h2 style="color:#0f2b5b;margin-top:0">🔔 New Demo Request</h2>
-        <table style="width:100%;border-collapse:collapse;font-size:14px">
-          <tr><td style="padding:8px;color:#555;width:140px"><strong>Name</strong></td><td style="padding:8px;color:#222">${name}</td></tr>
-          <tr style="background:#f5f7ff"><td style="padding:8px;color:#555"><strong>Email</strong></td><td style="padding:8px;color:#222">${email}</td></tr>
-          <tr><td style="padding:8px;color:#555"><strong>Phone</strong></td><td style="padding:8px;color:#222">${phone || '—'}</td></tr>
-          <tr style="background:#f5f7ff"><td style="padding:8px;color:#555"><strong>Institution</strong></td><td style="padding:8px;color:#222">${org}</td></tr>
-          <tr><td style="padding:8px;color:#555"><strong>Students</strong></td><td style="padding:8px;color:#222">${students || '—'}</td></tr>
-          <tr style="background:#f5f7ff"><td style="padding:8px;color:#555"><strong>Slot</strong></td><td style="padding:8px;color:#222;font-weight:bold">${time}</td></tr>
-        </table>
-        <p style="color:#888;font-size:12px;margin-top:20px">Calendar invite attached — accept to block the slot.</p>
+  const icsContent    = buildICS({ name, email, org, slot: time })
+  const icsAttachment = [{
+    filename: 'EduERP-Demo.ics',
+    content:  Buffer.from(icsContent).toString('base64'),
+    type:     'text/calendar',
+  }]
+
+  const userHtml = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;background:#f9f9f9;padding:32px;border-radius:12px">
+      <div style="text-align:center;margin-bottom:24px">
+        <h1 style="color:#0f2b5b;font-size:24px;margin:0">EduERP Pro</h1>
+        <p style="color:#4b7be5;margin:4px 0;font-size:13px">India's Leading Education ERP</p>
       </div>
-    `,
-    attachments: [{
-      filename:    'EduERP-Demo.ics',
-      content:     icsContent,
-      contentType: 'text/calendar; method=REQUEST',
-    }],
-  }
+      <h2 style="color:#0f2b5b">🎉 Demo Booked, ${name}!</h2>
+      <p style="color:#333;line-height:1.7">${confirmationMsg || `We're excited to show you EduERP Pro. Your demo is scheduled for <strong>${time}</strong>.`}</p>
+      <div style="background:#e8f0fe;border-left:4px solid #4b7be5;padding:16px;border-radius:6px;margin:20px 0">
+        <p style="margin:0;color:#0f2b5b;font-size:14px"><strong>📅 Slot:</strong> ${time}</p>
+        <p style="margin:6px 0 0;color:#0f2b5b;font-size:14px"><strong>🏫 Institution:</strong> ${org}</p>
+        <p style="margin:6px 0 0;color:#0f2b5b;font-size:14px"><strong>👥 Students:</strong> ${students || 'Not specified'}</p>
+        <p style="margin:6px 0 0;color:#0f2b5b;font-size:14px"><strong>📞 Phone:</strong> ${phone || 'Not provided'}</p>
+      </div>
+      <p style="color:#555;font-size:13px">A calendar invite is attached. Please accept it to add the demo to your calendar.</p>
+      <p style="color:#555;font-size:13px">Need to reschedule? Reply to this email or WhatsApp us.</p>
+      <div style="text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #ddd">
+        <p style="color:#999;font-size:12px">© 2025 EduERP Pro · sales@eduexperp.com</p>
+      </div>
+    </div>`
+
+  const adminHtml = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;background:#fff;padding:24px;border:1px solid #e0e0e0;border-radius:8px">
+      <h2 style="color:#0f2b5b;margin-top:0">🔔 New Demo Request</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr><td style="padding:8px;color:#555;width:140px"><strong>Name</strong></td><td style="padding:8px;color:#222">${name}</td></tr>
+        <tr style="background:#f5f7ff"><td style="padding:8px;color:#555"><strong>Email</strong></td><td style="padding:8px;color:#222">${email}</td></tr>
+        <tr><td style="padding:8px;color:#555"><strong>Phone</strong></td><td style="padding:8px;color:#222">${phone || '—'}</td></tr>
+        <tr style="background:#f5f7ff"><td style="padding:8px;color:#555"><strong>Institution</strong></td><td style="padding:8px;color:#222">${org}</td></tr>
+        <tr><td style="padding:8px;color:#555"><strong>Students</strong></td><td style="padding:8px;color:#222">${students || '—'}</td></tr>
+        <tr style="background:#f5f7ff"><td style="padding:8px;color:#555"><strong>Slot</strong></td><td style="padding:8px;color:#222;font-weight:bold">${time}</td></tr>
+      </table>
+      <p style="color:#888;font-size:12px;margin-top:20px">Calendar invite attached — accept to block the slot.</p>
+    </div>`
 
   try {
     await Promise.all([
-      transporter.sendMail(userMailOptions),
-      transporter.sendMail(adminMailOptions),
+      sendEmail({ to: email,                   subject: `✅ Demo Confirmed – EduERP Pro | ${time}`, html: userHtml,  attachments: icsAttachment }),
+      sendEmail({ to: process.env.ADMIN_EMAIL, subject: `📋 New Demo Booking – ${org} | ${time}`,  html: adminHtml, attachments: icsAttachment }),
     ])
     console.log(`✅  Demo emails sent → user: ${email} | admin: ${process.env.ADMIN_EMAIL}`)
-    return res.status(200).json({
-  success: true,
-  message: "Demo booked successfully"
-})
+    return res.status(200).json({ success: true, message: 'Demo booked successfully' })
   } catch (err) {
     console.error('Email error:', err.message)
-    return res.status(500).json({
-  success: false,
-  error: 'Failed to send email',
-  detail: err.message
-})
+    return res.status(500).json({ success: false, error: 'Failed to send email', detail: err.message })
   }
 })
 
 app.listen(PORT, () => {
   console.log(`\n✅  Backend running → http://localhost:${PORT}`)
-  console.log(`   Groq API key : ${process.env.GROQ_API_KEY.slice(0, 14)}…`)
-  console.log(`   SMTP user    : ${process.env.SMTP_USER}`)
-  console.log(`   Admin email  : ${process.env.ADMIN_EMAIL}\n`)
+  console.log(`   Groq API key  : ${(process.env.GROQ_API_KEY  || '').slice(0, 14)}…`)
+  console.log(`   Resend key    : ${(process.env.RESEND_API_KEY || '').slice(0, 14)}…`)
+  console.log(`   From email    : ${process.env.FROM_EMAIL}`)
+  console.log(`   Admin email   : ${process.env.ADMIN_EMAIL}\n`)
 })
