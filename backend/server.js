@@ -39,7 +39,7 @@ async function sendEmail({ to, subject, html, icsContent }) {
 }
 
 app.use(cors({
-  origin: ['https://eduerppro.vercel.app', 'http://localhost:5173'],
+  origin: ['https://eduerppro.vercel.app', '*'],
   credentials: true,
 }))
 app.use(express.json())
@@ -159,6 +159,9 @@ app.post('/api/book-demo', async (req, res) => {
     console.log(`✅  Demo emails sent → user: ${email} | admin: ${process.env.ADMIN_EMAIL}`)
     return res.status(200).json({ success: true, message: 'Demo booked successfully' })
   } catch (err) {
+    console.log("SMTP_USER:", process.env.SMTP_USER)
+console.log("SMTP_PASS:", process.env.SMTP_PASS ? "Loaded" : "Missing")
+ console.error('FULL ERROR:', err) 
     console.error('Email error:', err.message)
     return res.status(500).json({ success: false, error: 'Failed to send email', detail: err.message })
   }
