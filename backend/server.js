@@ -13,9 +13,6 @@ if (!process.env.GROQ_API_KEY) {
   process.exit(1)
 }
 
-
-const cors = require("cors");
-
 app.use(cors({
   origin: [
     "https://eduerppro.vercel.app",
