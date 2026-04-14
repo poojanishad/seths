@@ -1,40 +1,42 @@
-import express   from 'express'
-import cors      from 'cors'
-import dotenv    from 'dotenv'
-import nodemailer from 'nodemailer'
+import express from 'express'
+import cors from 'cors'
+import dotenv from 'dotenv'
 
 dotenv.config()
 
-const app  = express()
+const app = express()
 const PORT = process.env.PORT || 3001
 
+/* ── ENV CHECK ───────────────────────────────────────────── */
 if (!process.env.GROQ_API_KEY) {
-  console.error('\n❌  GROQ_API_KEY not found in backend/.env\n')
+  console.error('❌ GROQ_API_KEY missing')
   process.exit(1)
 }
 
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173' }))
+/* ── MIDDLEWARE ─────────────────────────────────────────── */
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*',
+}))
 app.use(express.json())
 
-/* ── Nodemailer transporter (Gmail) ─────────────────────────────── */
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
+app.get('/', (req, res) => {
+  res.send('API is running 🚀')
 })
 
-/* ── Build .ics calendar file string ────────────────────────────── */
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok' })
+})
+
+/* ── ICS BUILDER ────────────────────────────────────────── */
 function buildICS({ name, email, org, slot }) {
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
   tomorrow.setHours(10, 0, 0, 0)
 
   const dtStart = formatICSDate(tomorrow)
-  const dtEnd   = formatICSDate(new Date(tomorrow.getTime() + 30 * 60 * 1000))
-  const uid     = `demo-${Date.now()}@eduexperp.com`
-  const now     = formatICSDate(new Date())
+  const dtEnd = formatICSDate(new Date(tomorrow.getTime() + 2 * 60 * 60 * 1000))
+  const uid = `demo-${Date.now()}@eduexperp.com`
+  const now = formatICSDate(new Date())
 
   return [
     'BEGIN:VCALENDAR',
@@ -48,17 +50,11 @@ function buildICS({ name, email, org, slot }) {
     `DTSTART:${dtStart}`,
     `DTEND:${dtEnd}`,
     `SUMMARY:EduERP Pro Demo – ${org}`,
-    `DESCRIPTION:Your personalised EduERP Pro demo.\\nSlot requested: ${slot}\\nContact: ${email}`,
-    `ORGANIZER;CN=EduERP Pro Sales:mailto:${process.env.SMTP_USER}`,
-    `ATTENDEE;CN=${name};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${email}`,
-    `ATTENDEE;CN=Admin;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${process.env.ADMIN_EMAIL}`,
+    `DESCRIPTION:Slot: ${slot}\\nContact: ${email}`,
+    `ORGANIZER:mailto:${process.env.SENDER_EMAIL}`,
+    `ATTENDEE:mailto:${email}`,
+    `ATTENDEE:mailto:${process.env.ADMIN_EMAIL}`,
     'STATUS:CONFIRMED',
-    'SEQUENCE:0',
-    'BEGIN:VALARM',
-    'TRIGGER:-PT30M',
-    'ACTION:DISPLAY',
-    'DESCRIPTION:EduERP Demo starting in 30 minutes',
-    'END:VALARM',
     'END:VEVENT',
     'END:VCALENDAR',
   ].join('\r\n')
@@ -68,105 +64,118 @@ function formatICSDate(date) {
   return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
 }
 
-/* ── health ─────────────────────────────────────────────────────── */
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
-
-/* ── AI ─────────────────────────────────────────────────────────── */
+/* ── GROQ API ───────────────────────────────────────────── */
 app.post('/api/claude', async (req, res) => {
   const { prompt } = req.body
-  if (!prompt || typeof prompt !== 'string') {
-    return res.status(400).json({ error: 'prompt is required' })
+
+  if (!prompt) {
+    return res.status(400).json({ error: 'prompt required' })
   }
+
   try {
-    const upstream = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model:      'llama-3.1-8b-instant',
-        max_tokens: 1024,
-        messages:   [{ role: 'user', content: prompt.trim() }],
+        model: 'llama-3.1-8b-instant',
+        messages: [{ role: 'user', content: prompt }],
       }),
     })
-    const data  = await upstream.json()
+
+    const data = await response.json()
     return res.json({ reply: data.choices[0].message.content })
+
   } catch (err) {
-    return res.status(500).json({ error: 'Internal server error' })
+    console.error(err)
+    return res.status(500).json({ error: 'AI error' })
   }
 })
 
-/* ── Demo booking ───────────────────────────────────────────────── */
+/* ── BREVO EMAIL FUNCTION (FIXED) ───────────────────────── */
+async function sendEmail({ to, subject, html, icsContent }) {
+  const attachments = icsContent
+    ? [{
+        name: 'EduERP-Demo.ics',
+        content: Buffer.from(icsContent).toString('base64'),
+      }]
+    : []
+
+  try {
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'content-type': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+      },
+      body: JSON.stringify({
+        sender: {
+          name: 'EduERP Pro',
+          email: process.env.SENDER_EMAIL,
+        },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+        ...(attachments.length && { attachment: attachments }),
+      }),
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      console.error('❌ Brevo API Error:', err)
+      throw new Error(`Brevo error ${res.status}`)
+    }
+
+    return res.json()
+
+  } catch (err) {
+    console.error('❌ Email sending failed:', err.message)
+    throw err
+  }
+}
+
+/* ── BOOK DEMO ─────────────────────────────────────────── */
 app.post('/api/book-demo', async (req, res) => {
-  const { name, email, phone, org, students, time, confirmationMsg } = req.body
+  const { name, email, org, time } = req.body
 
   if (!name || !email || !org || !time) {
-    return res.status(400).json({ error: 'Missing required fields' })
-  }
-
-  const icsContent = buildICS({ name, email, org, slot: time })
-
-  const userMailOptions = {
-    from: `"EduERP Pro" <${process.env.SMTP_USER}>`,
-    to: email,
-    subject: `✅ Demo Confirmed – EduERP Pro | ${time}`,
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;background:#ffffff;padding:30px;border-radius:10px;border:1px solid #e5e7eb">
-
-        <h1 style="text-align:center;color:#1f3b8f;margin-bottom:5px">EduERP Pro</h1>
-        <p style="text-align:center;color:#4b7be5;font-size:13px;margin-top:0">
-          India's Leading Education ERP
-        </p>
-
-        <h2 style="color:#1f3b8f;margin-top:25px">
-          🎉 Demo Booked, ${name}!
-        </h2>
-
-        <p style="color:#333;line-height:1.7">
-          Dear ${name}, I would like to warmly welcome ${org} to EduERP Pro and thank you for choosing us.
-          We're thrilled to have you on board and excited to demonstrate how our ERP can streamline your operations.
-          Your demo is scheduled for tomorrow between 10 AM and 12 PM IST.
-        </p>
-
-        <div style="background:#eef4ff;border-left:4px solid #4b7be5;padding:16px;border-radius:6px;margin:20px 0">
-          <p style="margin:5px 0"><strong>📅 Slot:</strong> ${time}</p>
-          <p style="margin:5px 0"><strong>🏫 Institution:</strong> ${org}</p>
-          <p style="margin:5px 0"><strong>👥 Students:</strong> ${students || 'N/A'}</p>
-          <p style="margin:5px 0"><strong>📞 Phone:</strong> ${phone || 'Not provided'}</p>
-        </div>
-
-        <p style="color:#555;font-size:13px">
-          A calendar invite is attached. Please accept it to add the demo to your calendar.
-        </p>
-
-      </div>
-    `,
-    attachments: [{
-      filename: 'EduERP-Demo.ics',
-      content: icsContent,
-      contentType: 'text/calendar; method=REQUEST',
-    }],
-  }
-
-  const adminMailOptions = {
-    from: `"EduERP Pro Bot" <${process.env.SMTP_USER}>`,
-    to: process.env.ADMIN_EMAIL,
-    subject: `📋 New Demo Booking – ${org} | ${time}`,
-    html: `New booking from ${name}`,
+    return res.status(400).json({ error: 'Missing fields' })
   }
 
   try {
+    const ics = buildICS({ name, email, org, slot: time })
+
     await Promise.all([
-      transporter.sendMail(userMailOptions),
-      transporter.sendMail(adminMailOptions),
+      sendEmail({
+        to: email,
+        subject: `✅ Demo Confirmed – ${time}`,
+        html: `<h2>Hi ${name}, your demo is booked!</h2><p>Time: ${time}</p>`,
+        icsContent: ics,
+      }),
+      sendEmail({
+        to: process.env.ADMIN_EMAIL,
+        subject: `📋 New Booking – ${org}`,
+        html: `<p>${name} booked demo at ${time}</p>`,
+        icsContent: ics,
+      }),
     ])
+
     return res.json({ success: true })
+
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to send email', detail: err.message })
+    console.error('FULL ERROR:', err)
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to send email',
+      detail: err.message,
+    })
   }
 })
 
+/* ── START SERVER ───────────────────────────────────────── */
 app.listen(PORT, () => {
-  console.log(`✅ Backend running on port ${PORT}`)
+  console.log(`✅ Server running on port ${PORT}`)
 })
