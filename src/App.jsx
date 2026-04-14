@@ -94,21 +94,25 @@ function validate(fields, rules) {
   }
   return errs
 }
+const API_URL = import.meta.env.VITE_API_URL;
 
 /* ═══════════════════════════════════════════════
    CLAUDE API CALL  — proxied via /backend/server.js
    (API key stays on the server, never in the browser)
 ═══════════════════════════════════════════════ */
 async function callClaude(prompt) {
-  const res = await fetch('/api/claude', {
+  const res = await fetch(`${API_URL}/api/claude`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
-  })
-  if (!res.ok) throw new Error('API error')
-  const data = await res.json()
-  if (data.error) throw new Error(data.error)
-  return data.reply
+  });
+
+  if (!res.ok) throw new Error('API error');
+
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+
+  return data.reply;
 }
 
 /* ═══════════════════════════════════════════════
@@ -387,7 +391,7 @@ Preferred slot: ${form.time}
 Mention their specific slot, reference their institution size, and express genuine excitement. End with what they can expect in the demo. No subject line, no sign-off — just the body paragraph.`
       )
       // 2. Send real emails + .ics calendar invite to user & admin
-      await fetch('http://localhost:3001/api/book-demo', {
+      await fetch(`${API_URL}/api/book-demo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
