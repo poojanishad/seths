@@ -391,7 +391,7 @@ Preferred slot: ${form.time}
 Mention their specific slot, reference their institution size, and express genuine excitement. End with what they can expect in the demo. No subject line, no sign-off — just the body paragraph.`
       )
       // 2. Send real emails + .ics calendar invite to user & admin
-      await fetch(`${API_URL}/api/book-demo`, {
+      await fetch(`${API_URL.replace(/\/$/, '')}/api/book-demo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
