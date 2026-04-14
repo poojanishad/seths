@@ -2,6 +2,7 @@ import express   from 'express'
 import cors      from 'cors'
 import dotenv    from 'dotenv'
 import nodemailer from 'nodemailer'
+import fetch from 'node-fetch' 
 
 dotenv.config()
 
@@ -123,7 +124,12 @@ app.post('/api/book-demo', async (req, res) => {
   }
 
   const icsContent = buildICS({ name, email, org, slot: time })
-
+if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+  return res.status(500).json({
+    success: false,
+    error: "SMTP not configured"
+  })
+}
   const userMailOptions = {
     from:    `"EduERP Pro" <${process.env.SMTP_USER}>`,
     to:      email,
@@ -187,10 +193,17 @@ app.post('/api/book-demo', async (req, res) => {
       transporter.sendMail(adminMailOptions),
     ])
     console.log(`✅  Demo emails sent → user: ${email} | admin: ${process.env.ADMIN_EMAIL}`)
-    return res.json({ success: true })
+    return res.status(200).json({
+  success: true,
+  message: "Demo booked successfully"
+})
   } catch (err) {
     console.error('Email error:', err.message)
-    return res.status(500).json({ error: 'Failed to send email', detail: err.message })
+    return res.status(500).json({
+  success: false,
+  error: 'Failed to send email',
+  detail: err.message
+})
   }
 })
 
