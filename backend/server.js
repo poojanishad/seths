@@ -183,9 +183,9 @@ app.post('/api/book-demo', async (req, res) => {
 
   try {
     await Promise.all([
-      sendEmail({ to: email,                   subject: `✅ Demo Confirmed – EduERP Pro | ${time}`, html: userHtml,  attachments: icsAttachment }),
-      sendEmail({ to: process.env.ADMIN_EMAIL, subject: `📋 New Demo Booking – ${org} | ${time}`,  html: adminHtml, attachments: icsAttachment }),
-    ])
+  sendEmail({ to: 'pooja.nishad0621@gmail.com', subject: `✅ Demo Confirmed – ${form.name} | ${time}`, html: userHtml, attachments: icsAttachment }),
+  sendEmail({ to: 'pooja.nishad0621@gmail.com', subject: `📋 New Demo Booking – ${org} | ${time}`, html: adminHtml, attachments: icsAttachment }),
+])
     console.log(`✅  Demo emails sent → user: ${email} | admin: ${process.env.ADMIN_EMAIL}`)
     return res.status(200).json({ success: true, message: 'Demo booked successfully' })
   } catch (err) {
