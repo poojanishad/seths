@@ -8,9 +8,6 @@ dotenv.config()
 const app  = express()
 const PORT = process.env.PORT || 3001;
 
-app.listen(PORT, () => {
-  console.log("Server running on " + PORT);
-});
 if (!process.env.GROQ_API_KEY) {
   console.error('\n❌  GROQ_API_KEY not found in backend/.env\n')
   process.exit(1)
@@ -18,6 +15,10 @@ if (!process.env.GROQ_API_KEY) {
 
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173' }))
 app.use(express.json())
+
+app.get('/', (req, res) => {
+  res.send('API is running 🚀');
+});
 
 /* ── Nodemailer transporter (Gmail) ─────────────────────────────── */
 const transporter = nodemailer.createTransport({
